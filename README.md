@@ -1,13 +1,12 @@
 # Research Agent
 
-A project-agnostic autonomous research loop for Claude Code. Provides intelligent literature search via a Claude agent, experiment tracking, and a protocol that Claude follows to iteratively improve ML experiments.
+A project-agnostic autonomous research loop for Claude Code. Runs in a **live tmux session** — Claude Code searches literature, implements changes, runs experiments, and tracks everything via git. You watch and provide feedback.
 
 ## Components
 
 | File | Purpose |
 |------|---------|
-| `search_papers.py` | CLI entry point: builds prompt, calls search_agent.mjs |
-| `search_agent.mjs` | Claude Code SDK agent: WebSearch, evaluates, ranks papers |
+| `search_papers.py` | Literature search via `claude -p` (pipe mode) with WebSearch |
 | `run_and_wait.sh` | Bash wrapper: runs experiment, writes `.done` marker on completion |
 | `state.py` | CLI: persistent JSON state + auto-updates `progress.md` |
 | `git_ops.py` | Git workflow: branch per iteration, structured commits, merge best to main |
@@ -15,12 +14,36 @@ A project-agnostic autonomous research loop for Claude Code. Provides intelligen
 
 ## Requirements
 
-- Python 3.10+ (uses `int | None` syntax)
-- Node.js 18+ (for the Claude Agent SDK)
-- `@anthropic-ai/claude-agent-sdk` npm package (install: `cd research_agent && npm install`)
-- `ANTHROPIC_API_KEY` environment variable (get from https://console.anthropic.com/)
+- Python 3.10+
+- Claude Code CLI (`npm install -g @anthropic-ai/claude-code`)
+- Claude Max subscription (no separate API key needed)
+- tmux (for the live session)
 
 ## How It Works
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│  tmux session                                       │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  Claude Code (interactive)                    │  │
+│  │                                               │  │
+│  │  1. Read progress.md + state.json             │  │
+│  │  2. Search papers (claude -p → WebSearch)     │  │
+│  │  3. Form hypothesis, implement ONE change     │  │
+│  │  4. Git branch + commit code                  │  │
+│  │  5. Launch experiment (run_and_wait.sh)        │  │
+│  │  6. Poll for completion                       │  │
+│  │  7. Analyze results, update state             │  │
+│  │  8. Git commit results, push                  │  │
+│  │  9. Present summary → wait for user feedback  │  │
+│  │  10. Repeat                                   │  │
+│  └───────────────────────────────────────────────┘  │
+│                                                     │
+│  User watches, provides feedback at step 9          │
+└─────────────────────────────────────────────────────┘
+```
 
 ### 1. User creates `progress.md` with the goal
 
@@ -34,22 +57,24 @@ Improve heart segmentation 3D Dice above 0.92 using adapter architecture changes
 - Must converge within 200 epochs
 ```
 
-### 2. Agent initializes from it
+### 2. Start in tmux
 
 ```bash
-python -m research_agent.state init --progress progress.md --metric test_3d_dice
+# Create a tmux session for the research loop
+tmux new -s research
+
+# Start Claude Code
+claude
+
+# Tell it your goal:
+> Start the research loop from progress.md
 ```
 
-### 3. Literature search via Claude agent
+Claude reads your goal, initializes state, and begins iterating autonomously. You can detach (`Ctrl-b d`) and reattach (`tmux attach -t research`) at any time.
 
-Paper search is done by a **Claude agent** via the `@anthropic-ai/claude-agent-sdk`. Requires `ANTHROPIC_API_KEY`. The agent:
+### 3. Literature search via `claude -p`
 
-- Reads `progress.md` and `state.json` to understand the project
-- Plans 3-5 specific search queries targeting different angles of the topic
-- Executes web searches and reads paper pages for details
-- Evaluates each paper's relevance to the project (scored 1-5)
-- Extracts a `key_idea` explaining what we can apply from each paper
-- Writes structured JSON results
+Paper search uses Claude Code's **pipe mode** — spawns a separate Claude instance with WebSearch access. Uses your Max subscription, no extra cost.
 
 ```bash
 python research_agent/search_papers.py \
@@ -128,10 +153,6 @@ Feedback: significant gain, new best
 *** NEW BEST ***
 ```
 
-### 5. Agent runs experiment iterations
-
-Each iteration: search literature, implement one change, run experiment, record results. Every state change auto-updates `progress.md`, so the user can check progress at any time.
-
 ### 5. progress.md gets auto-updated
 
 After each iteration, `progress.md` looks like:
@@ -165,72 +186,56 @@ After each iteration, `progress.md` looks like:
 
 ## Quick Start
 
-### Search for papers
+```bash
+# 1. Create progress.md with your research goal
+cat > progress.md << 'EOF'
+# Research Goal
+Improve heart segmentation 3D Dice above 0.92.
+EOF
+
+# 2. Start tmux + Claude Code
+tmux new -s research
+claude
+# > Start the research loop from progress.md
+```
+
+### Manual CLI usage
 
 ```bash
-# One-time setup:
-cd research_agent && npm install && cd ..
+# Initialize state from progress.md:
+python -m research_agent.state init --progress progress.md --metric test_3d_dice
 
-# Search:
+# Search for papers:
 python research_agent/search_papers.py \
   "parameter efficient fine-tuning medical segmentation SAM" \
   results/search.json \
   --progress progress.md --state state.json
-```
 
-### Initialize a research session
-
-```bash
-# From user's progress.md:
-python -m research_agent.state init --progress progress.md --metric test_3d_dice
-
-# Or with explicit goal:
-python -m research_agent.state init --goal "improve dice above 0.92" --metric test_3d_dice
-```
-
-### Record baseline
-
-```bash
+# Record baseline:
 python -m research_agent.state set-baseline \
   --checkpoint checkpoints/baseline \
   --metrics '{"test_3d_dice": 0.905, "test_3d_nsd": 0.940}'
-```
 
-### Run an experiment
-
-```bash
+# Run experiment:
 bash research_agent/run_and_wait.sh scripts/my_experiment.sh checkpoints/exp1/
 # Poll:
 test -f checkpoints/exp1/.done && cat checkpoints/exp1/.done || echo RUNNING
-```
 
-### Record iteration
-
-```bash
+# Record iteration:
 python -m research_agent.state add-iteration \
   --hypothesis "Higher SPD rank increases expressiveness" \
   --change "spd_rank 4 -> 8" \
   --checkpoint checkpoints/exp1 \
   --metric-name test_3d_dice --metric-value 0.912 \
   --feedback "small gain, try token-wise FiLM next"
-```
 
-### Update progress note
-
-```bash
-python -m research_agent.state update-progress --status "Waiting for experiment 3 to finish"
-```
-
-### Generate standalone report
-
-```bash
+# Generate report:
 python -m research_agent.state report
-python -m research_agent.state report --output research_report.md
 ```
 
 ## Integration with a Project
 
-### Step 1: Make the package importable
+### Step 1: Copy into your project
 
 ```bash
 cp -r /data/humanBodyProject/new_proj/research_agent/ /path/to/your/project/
@@ -256,14 +261,13 @@ Customize for your project (metric names, experiment scripts, etc.).
 
 ### Step 4: Start a research session
 
-In a tmux session with Claude Code:
-
-```
+```bash
+tmux new -s research
 claude
 > Start the research loop from progress.md
 ```
 
-Claude reads your goal, initializes state, and begins the iteration cycle.
+Claude reads your goal, initializes state, and begins the iteration cycle. Detach/reattach freely.
 
 ## State File
 

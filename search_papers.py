@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Search for papers using a Claude agent via the Claude Agent SDK.
+"""Search for papers using Claude Code in pipe mode (claude -p).
 
-Uses @anthropic-ai/claude-agent-sdk to spawn a Claude agent with web search.
-Requires ANTHROPIC_API_KEY environment variable.
-
-The agent gets full access to WebSearch, WebFetch, and file reading.
+Uses your existing Claude Code CLI auth (Max subscription). No separate API
+key needed. The agent gets WebSearch, WebFetch, and Read tools.
 
 Usage:
     python search_papers.py "topic" output.json
@@ -20,10 +18,7 @@ import argparse
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
-
-AGENT_SCRIPT = Path(__file__).parent / "search_agent.mjs"
 
 SYSTEM_INSTRUCTIONS = """\
 You are a research paper search agent for an ML project. Your ONLY job is to \
@@ -79,7 +74,7 @@ markdown fences, no commentary before or after). Each element:
 def _build_prompt(topic: str, progress_path: str | None,
                   state_path: str | None) -> str:
     """Build the full prompt with topic, instructions, and project context."""
-    parts = [SYSTEM_INSTRUCTIONS, "", f"## Search Topic\n{topic}"]
+    parts = [f"## Search Topic\n{topic}"]
 
     if progress_path and Path(progress_path).exists():
         content = Path(progress_path).read_text().strip()
@@ -155,59 +150,54 @@ def _extract_json_array(text: str) -> list | None:
 
 def run_search(topic: str, output_path: str, progress_path: str | None,
                state_path: str | None) -> list | None:
-    """Run the search agent via Claude Code SDK and parse results."""
+    """Run paper search via `claude -p` (pipe mode) and parse results."""
     prompt = _build_prompt(topic, progress_path, state_path)
 
-    # Write prompt to temp file for the Node.js agent
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-        f.write(prompt)
-        prompt_file = f.name
-
-    # Raw output goes to a temp file, we parse and write the final JSON
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-        raw_output_file = f.name
-
     print(f"Searching: {topic}", file=sys.stderr)
-    print(f"Using Claude Agent SDK (search_agent.mjs)", file=sys.stderr)
+    print(f"Using: claude -p (pipe mode, Max subscription)", file=sys.stderr)
 
     try:
         result = subprocess.run(
-            ["node", str(AGENT_SCRIPT), prompt_file, raw_output_file],
+            [
+                "claude", "-p",
+                "--allowedTools", "WebSearch", "WebFetch", "Read",
+                "--append-system-prompt", SYSTEM_INSTRUCTIONS,
+                "--output-format", "text",
+            ],
+            input=prompt,
             capture_output=True,
             text=True,
             timeout=600,  # 10 min max
         )
 
-        # Print agent stderr (progress messages)
         if result.stderr:
             print(result.stderr, file=sys.stderr, end="")
 
         if result.returncode != 0:
-            print(f"Agent exited with code {result.returncode}", file=sys.stderr)
+            print(f"claude -p exited with code {result.returncode}",
+                  file=sys.stderr)
+            if result.stdout:
+                print(f"stdout: {result.stdout[:300]}", file=sys.stderr)
             return None
 
+        raw_text = result.stdout
+
     except subprocess.TimeoutExpired:
-        print("Agent timed out after 10 minutes", file=sys.stderr)
+        print("claude -p timed out after 10 minutes", file=sys.stderr)
         return None
     except FileNotFoundError:
         print(
-            "Error: 'node' not found. Install Node.js and run:\n"
-            "  cd research_agent && npm install",
+            "Error: 'claude' CLI not found. Install Claude Code:\n"
+            "  npm install -g @anthropic-ai/claude-code",
             file=sys.stderr,
         )
         return None
-    finally:
-        # Clean up prompt file
-        Path(prompt_file).unlink(missing_ok=True)
 
-    # Read raw output
-    raw_text = Path(raw_output_file).read_text()
-    Path(raw_output_file).unlink(missing_ok=True)
-
-    # Parse JSON
+    # Parse JSON from response
     papers = _extract_json_array(raw_text)
     if papers is None:
-        print("Warning: Could not parse JSON from agent response.", file=sys.stderr)
+        print("Warning: Could not parse JSON from claude response.",
+              file=sys.stderr)
         print(f"Raw response:\n{raw_text[:500]}...", file=sys.stderr)
         Path(output_path).write_text(raw_text)
         return None
@@ -224,8 +214,8 @@ def run_search(topic: str, output_path: str, progress_path: str | None,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Search for papers using Claude Code SDK with web search. "
-                    "No API key needed — uses your Claude Code auth.",
+        description="Search for papers using Claude Code pipe mode. "
+                    "No API key needed — uses your Claude Code auth (Max sub).",
         epilog="""Examples:
   python search_papers.py "Householder orthogonal adapters for ViT" results.json
   python search_papers.py "nullspace bias adapter layers" results.json --progress progress.md

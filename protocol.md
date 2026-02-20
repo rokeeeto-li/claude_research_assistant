@@ -1,6 +1,6 @@
 ## Research Loop Protocol
 
-When asked to start a research loop, follow this protocol.
+When asked to start a research loop, follow this protocol. You are running in a **live tmux session** — the user can watch your progress, detach/reattach, and provide feedback.
 
 ### progress.md
 
@@ -57,7 +57,7 @@ main                          ← always has the best-performing code
    python -m research_agent.state read
    ```
 
-2. **Search literature** — use the Claude search agent to find relevant papers:
+2. **Search literature** — use `claude -p` (pipe mode) to find relevant papers:
    ```
    python research_agent/search_papers.py \
      "orthogonal adapter Gram-preserving fine-tuning for ViT" \
@@ -66,6 +66,7 @@ main                          ← always has the best-performing code
    ```
    - The topic must be specific to this iteration's technique.
    - Review results; focus on papers with relevance >= 4.
+   - Uses your Max subscription, no extra API cost.
 
 3. **Form hypothesis** — based on papers + previous results.
 
@@ -151,3 +152,4 @@ main                          ← always has the best-performing code
 - **Cite papers** — when a technique comes from literature, note the reference.
 - **Never edit the user's goal section** in `progress.md`.
 - **Push after every commit** — keep GitLab in sync so nothing is lost.
+- **Present clear summaries** — the user is watching in tmux, make status updates readable.
