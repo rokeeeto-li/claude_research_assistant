@@ -4,7 +4,10 @@ __pycache__/
 state.json
 progress.md
 results/
+workspace/
 *.log
 *.prompt
 *.done
+*.err
+*.output
 .env

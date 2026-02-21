@@ -25,6 +25,7 @@ from pathlib import Path
 
 POLL_INTERVAL = 5  # seconds between completion checks
 DEFAULT_TIMEOUT = 300  # 5 minutes
+WORKSPACE = Path(__file__).resolve().parent / "workspace"
 
 
 # ── Prompt building ──────────────────────────────────────────────────
@@ -190,16 +191,18 @@ def run_search(topic: str, output_path: str,
     context, seen_papers = _build_context(state_path)
     prompt = _build_prompt(topic, context, seen_papers)
 
-    # Resolve all paths to absolute so they work from any cwd
+    # Use workspace for temp files, output goes to user-specified path
+    WORKSPACE.mkdir(parents=True, exist_ok=True)
     out = Path(output_path).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    prompt_file = out.with_suffix(".prompt")
-    done_marker = out.with_suffix(".done")
-    err_file = out.with_suffix(".err")
+    prompt_file = WORKSPACE / "func_a.prompt"
+    done_marker = WORKSPACE / "func_a.done"
+    err_file = WORKSPACE / "func_a.err"
+    worker_out = WORKSPACE / "func_a.output"
 
     # Clean previous run artifacts
-    for f in [out, done_marker, err_file]:
+    for f in [worker_out, done_marker, err_file]:
         f.unlink(missing_ok=True)
 
     prompt_file.write_text(prompt)
@@ -208,7 +211,7 @@ def run_search(topic: str, output_path: str,
     cmd = (
         f"claude -p --verbose "
         f"< {shlex.quote(str(prompt_file))} "
-        f"> {shlex.quote(str(out))} "
+        f"> {shlex.quote(str(worker_out))} "
         f"2> {shlex.quote(str(err_file))}; "
         f"echo $? > {shlex.quote(str(done_marker))}"
     )
@@ -248,15 +251,15 @@ def run_search(topic: str, output_path: str,
               file=sys.stderr)
         # Still try to parse output — Claude may have produced partial results
 
-    if not out.exists() or out.stat().st_size == 0:
+    if not worker_out.exists() or worker_out.stat().st_size == 0:
         print("No output produced by worker", file=sys.stderr)
         return None
 
-    raw = out.read_text()
+    raw = worker_out.read_text()
     papers = _extract_json_array(raw)
 
     if papers is not None:
-        # Write clean JSON
+        # Write clean JSON to user-specified output path
         with open(out, "w") as f:
             json.dump(papers, f, indent=2, ensure_ascii=False)
             f.write("\n")

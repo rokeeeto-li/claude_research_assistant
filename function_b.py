@@ -33,6 +33,7 @@ from pathlib import Path
 
 POLL_INTERVAL = 5  # seconds between completion checks
 DEFAULT_TIMEOUT = 600  # 10 minutes
+WORKSPACE = Path(__file__).resolve().parent / "workspace"
 
 
 # ── Prompt building ──────────────────────────────────────────────────
@@ -190,17 +191,16 @@ def run_implementation(papers_path: str | None, instruction: str | None,
     prompt = _build_prompt(papers_path, instruction, project_dir,
                            focus_files, state_path)
 
-    # Set up output paths (in project's results/ dir)
-    results_dir = Path(project_dir).resolve() / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
+    # Use workspace for all temp/output files (avoids /tmp space issues)
+    WORKSPACE.mkdir(parents=True, exist_ok=True)
 
-    out = (results_dir / "func_b_output.txt").resolve()
-    prompt_file = out.with_suffix(".prompt")
-    done_marker = out.with_suffix(".done")
-    err_file = out.with_suffix(".err")
+    worker_out = WORKSPACE / "func_b.output"
+    prompt_file = WORKSPACE / "func_b.prompt"
+    done_marker = WORKSPACE / "func_b.done"
+    err_file = WORKSPACE / "func_b.err"
 
     # Clean previous run artifacts
-    for f in [out, done_marker, err_file]:
+    for f in [worker_out, done_marker, err_file]:
         f.unlink(missing_ok=True)
 
     prompt_file.write_text(prompt)
@@ -211,7 +211,7 @@ def run_implementation(papers_path: str | None, instruction: str | None,
         f"cd {proj_abs} && "
         f"claude -p --verbose "
         f"< {shlex.quote(str(prompt_file))} "
-        f"> {shlex.quote(str(out))} "
+        f"> {shlex.quote(str(worker_out))} "
         f"2> {shlex.quote(str(err_file))}; "
         f"echo $? > {shlex.quote(str(done_marker))}"
     )
@@ -250,11 +250,11 @@ def run_implementation(papers_path: str | None, instruction: str | None,
               file=sys.stderr)
         # Still try to parse — partial output may be useful
 
-    if not out.exists() or out.stat().st_size == 0:
+    if not worker_out.exists() or worker_out.stat().st_size == 0:
         print("No output produced by worker", file=sys.stderr)
         return None
 
-    raw = out.read_text()
+    raw = worker_out.read_text()
     summary = _extract_summary(raw)
 
     print(f"Done: {summary.get('change_summary', 'N/A')}", file=sys.stderr)
