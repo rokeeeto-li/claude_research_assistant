@@ -6,10 +6,19 @@ When asked to start a research loop, follow this protocol. You are running in a 
 
 The loop supports two modes, set by the user at startup or changed between iterations:
 
-- **Autonomous mode** (`--auto`): After each iteration, analyze results and auto-decide the next experiment. Continue without waiting for user input. Stop only when the goal is reached, the metric plateaus for 3+ iterations, or you are unsure what to try.
+- **Autonomous mode**: After each iteration, analyze results and auto-decide the next experiment. Continue without waiting for user input. Stop only when the goal is reached, the metric plateaus for 3+ iterations, or you are unsure what to try.
 - **Interactive mode** (default): After each iteration, present a summary and **wait for user feedback** before continuing.
 
 The user can switch modes at any time by saying "continue autonomously" or "wait for my feedback".
+
+### Core Functions
+
+The loop is built around two Claude API-powered Python functions:
+
+- **Function A** (`function_a.py`): Literature search. Takes a topic → calls Claude API with web_search → returns ranked papers as JSON.
+- **Function B** (`function_b.py`): Code implementation. Takes papers or instructions → calls Claude API agentic loop with file read/edit tools → modifies the codebase.
+
+These are called by the main Claude Code session (you) via Bash. You orchestrate, they execute.
 
 ### progress.md
 
@@ -67,59 +76,61 @@ main                          ← always has the best-performing code
    ```
 
 2. **Decide what to try** — the change can come from different sources:
-   - **User instruction** — the user told you exactly what to try (skip search).
-   - **Previous results** — analysis of the last iteration suggests an obvious next step (skip search).
-   - **New technique needed** — search literature first (see below).
+   - **User instruction** — the user told you exactly what to try (skip Function A, go to Function B with `--instruction`).
+   - **Previous results** — analysis of the last iteration suggests an obvious next step (skip Function A).
+   - **New technique needed** — call Function A first.
 
-3. **(Optional) Search literature** — only when exploring unfamiliar techniques:
+3. **(Optional) Function A — literature search:**
    ```
-   python research_agent/search_papers.py \
-     "orthogonal adapter Gram-preserving fine-tuning for ViT" \
-     results/search_iter3.json \
-     --limit 10 --year-min 2023
+   python research_agent/function_a.py "orthogonal adapter fine-tuning" \
+     results/search_iter3.json --state state.json
    ```
-   - Use `--related-to <arxiv_id>` to find papers related to a known one.
-   - Supplement with your own WebSearch if the APIs miss key papers.
-   - Skip this step when the user gives a specific instruction or the next step is obvious.
+   Or auto-generate the topic from the last iteration:
+   ```
+   python research_agent/function_a.py --auto results/search_iter3.json --state state.json
+   ```
+   - Calls Claude API with web_search to find papers.
+   - Auto-deduplicates against papers already used in previous iterations.
+   - Skip when the user gives a specific instruction or the next step is obvious.
 
-4. **Form hypothesis** — based on user feedback, papers (if searched), and previous results.
+4. **Function B — implement the change:**
+   ```
+   # From papers:
+   python research_agent/function_b.py --papers results/search_iter3.json \
+     --project-dir . --state state.json \
+     --files models/sam/modeling/common.py
 
-4. **Create branch** — start a git branch for this iteration:
+   # Or from direct instruction:
+   python research_agent/function_b.py --instruction "increase spd_rank to 8" \
+     --project-dir . --state state.json
    ```
-   python -m research_agent.git_ops branch-start \
-     --iteration 3 --change "enable token-wise FiLM"
-   ```
+   - Claude API agentic loop: reads code, plans edits, modifies files.
+   - Returns JSON summary: `{hypothesis, change_summary, files_modified, papers_used}`.
 
-5. **Implement** — make ONE principal change. Create a new experiment script if needed.
+5. **Review changes** — read what Function B modified, verify correctness.
 
-6. **Commit code** — commit changes with structured message (before running experiment):
+6. **Create branch + commit code:**
    ```
-   python -m research_agent.git_ops commit-code \
-     --iteration 3 \
-     --hypothesis "Token-wise FiLM enables per-token adaptation" \
-     --change "cond_scale_tokenwise=True" \
-     --papers "FiLM 2018" "AdaptFormer 2022" \
-     --checkpoint "checkpoints/exp_tokenfilm"
-   ```
-
-7. **Push branch** — push to GitLab so changes are backed up while experiment runs:
-   ```
+   python -m research_agent.git_ops branch-start --iteration 3 --change "..."
+   python -m research_agent.git_ops commit-code --iteration 3 \
+     --hypothesis "..." --change "..." --papers "..." \
+     --checkpoint "checkpoints/exp_..."
    python -m research_agent.git_ops push
    ```
 
-8. **Execute** — launch experiment in background:
+7. **Execute experiment** — launch in background:
    ```
    bash research_agent/run_and_wait.sh <script> <checkpoint_dir>
    ```
 
-9. **Poll** — check completion every ~10 minutes:
+8. **Poll** — check completion every ~10 minutes:
    ```
    test -f <checkpoint_dir>/.done && cat <checkpoint_dir>/.done || echo RUNNING
    ```
 
-10. **Analyze** — read results, compare with baseline and previous best.
+9. **Analyze** — read results, compare with baseline and previous best.
 
-11. **Update state** — record iteration (auto-updates `progress.md`):
+10. **Update state** — record iteration (auto-updates `progress.md`):
     ```
     python -m research_agent.state add-iteration \
       --hypothesis "..." --change "..." --checkpoint "..." \
@@ -127,26 +138,25 @@ main                          ← always has the best-performing code
       --feedback "..."
     ```
 
-12. **Commit results** — add a results commit to the branch:
+11. **Commit results:**
     ```
-    python -m research_agent.git_ops commit-results \
-      --iteration 3 --state state.json
+    python -m research_agent.git_ops commit-results --iteration 3 --state state.json
     ```
 
-13. **If new best → merge to main** and push:
+12. **If new best → merge to main** and push:
     ```
     python -m research_agent.git_ops merge-best --state state.json
     python -m research_agent.git_ops push
     ```
 
-14. **Summarize** — present results and proposed next steps to user.
+13. **Summarize** — present results and proposed next steps to user.
 
-15. **Next iteration decision:**
+14. **Next iteration decision:**
     - **Interactive mode:** Wait for user feedback before continuing.
     - **Autonomous mode:** Auto-decide the next step based on results:
       - **Improved?** → Build on it (vary the same knob, combine with another).
       - **Regressed?** → Revert to best config, try a different direction.
-      - **Plateaued (3+ iters)?** → Search literature for fresh ideas, or stop and ask the user.
+      - **Plateaued (3+ iters)?** → Call Function A for fresh ideas, or stop and ask the user.
       - **Goal reached?** → Stop and present final summary.
       - **Unsure?** → Stop and ask the user for direction.
 
@@ -157,7 +167,7 @@ When running autonomously, use these heuristics to decide what to try next:
 1. **Read the full iteration history** from state.json — look for trends, not just the last result.
 2. **If the last change helped:** Try a variant (e.g., helped with rank 4 → try rank 8) or combine it with the second-best change.
 3. **If the last change hurt or was neutral:** Revert to the best config and try something orthogonal (different component, different technique).
-4. **After 3+ iterations without improvement:** Search literature for new ideas. If still stuck, stop and ask the user.
+4. **After 3+ iterations without improvement:** Call Function A with `--auto` to search for new ideas. If still stuck, stop and ask the user.
 5. **Log your reasoning** in the `--feedback` field so the user can review your thought process.
 
 ### Git Commands Reference
@@ -184,3 +194,4 @@ When running autonomously, use these heuristics to decide what to try next:
 - **Never edit the user's goal section** in `progress.md`.
 - **Push after every commit** — keep GitLab in sync so nothing is lost.
 - **Present clear summaries** — the user is watching in tmux, make status updates readable.
+- **Review Function B's changes** — always verify what it modified before committing.

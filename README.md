@@ -28,7 +28,9 @@ You define a research goal. Claude Code autonomously searches literature, implem
 
 | File | Language | Purpose |
 |------|----------|---------|
-| `search_papers.py` | Python (stdlib) | Academic paper search via Semantic Scholar + arXiv APIs |
+| `function_a.py` | Python (stdlib) | **Function A**: Literature search via Claude API + web_search |
+| `function_b.py` | Python (stdlib) | **Function B**: Code implementation via Claude API agentic loop |
+| `search_papers.py` | Python (stdlib) | Fallback paper search via Semantic Scholar + arXiv (no API key) |
 | `state.py` | Python (stdlib) | Persistent JSON state + auto-updates `progress.md` |
 | `git_ops.py` | Python (stdlib) | Branch per iteration, structured commits, merge best to main |
 | `run_and_wait.sh` | Bash | Experiment runner with `.done` completion marker |
@@ -38,9 +40,9 @@ You define a research goal. Claude Code autonomously searches literature, implem
 
 - **Python 3.10+** (uses `int | None` syntax)
 - **Claude Code CLI** (`npm install -g @anthropic-ai/claude-code`) with an active subscription
+- **ANTHROPIC_API_KEY** environment variable (for Function A and B)
 - **tmux** (for the live interactive session)
 - **git** (for iteration tracking)
-- No API keys needed — Semantic Scholar and arXiv APIs are free and unauthenticated
 
 ---
 
@@ -149,19 +151,16 @@ Claude will:
 │  │  Orchestrates the loop:                            │  │
 │  │  ┌──────────────────────────────────────────────┐  │  │
 │  │  │ 1. Read state.json (recover context)         │  │  │
-│  │  │ 2. Decide what to try (user instruction or    │  │  │
-│  │  │    search_papers.py if exploring new ideas)  │  │  │
-│  │  │ 3. Form hypothesis                           │  │  │
-│  │  │ 4. python git_ops.py branch-start            │  │  │
-│  │  │ 5. Implement ONE change in code              │  │  │
-│  │  │ 6. python git_ops.py commit-code + push      │  │  │
-│  │  │ 7. bash run_and_wait.sh (background)         │  │  │
-│  │  │ 8. Poll for .done marker                     │  │  │
-│  │  │ 9. python state.py add-iteration             │  │  │
-│  │  │ 10. python git_ops.py commit-results         │  │  │
-│  │  │ 11. Present summary to user                  │  │  │
-│  │  │ 12. Wait for feedback OR auto-continue       │  │  │
-│  │  │ 13. Repeat                                   │  │  │
+│  │  │ 2. (Optional) Function A → find papers       │  │  │
+│  │  │ 3. Function B → implement change in code     │  │  │
+│  │  │ 4. Review changes, git branch + commit       │  │  │
+│  │  │ 5. bash run_and_wait.sh (background)         │  │  │
+│  │  │ 6. Poll for .done marker                     │  │  │
+│  │  │ 7. Analyze, state.py add-iteration           │  │  │
+│  │  │ 8. git_ops.py commit-results                 │  │  │
+│  │  │ 9. Summarize results to user                 │  │  │
+│  │  │ 10. Wait for feedback OR auto-continue       │  │  │
+│  │  │ 11. Repeat                                   │  │  │
 │  │  └──────────────────────────────────────────────┘  │  │
 │  └────────────────────────────────────────────────────┘  │
 │                                                          │
@@ -197,20 +196,18 @@ Each iteration follows this sequence. Claude executes these steps autonomously, 
 | Step | Action | Tool |
 |------|--------|------|
 | 1 | Read state (recover context) | `python -m research_agent.state read` |
-| 2 | Decide what to try | User instruction, previous results, or literature search |
-| 3 | *(Optional)* Search literature | `python research_agent/search_papers.py "query" results/search_iterN.json` |
-| 4 | Form hypothesis | Claude (based on user input, papers if searched, prior results) |
-| 5 | Create git branch | `python -m research_agent.git_ops branch-start --iteration N --change "..."` |
-| 6 | Implement ONE change | Claude (edits code) |
-| 7 | Commit code + push | `python -m research_agent.git_ops commit-code ...` then `push` |
-| 8 | Launch experiment | `bash research_agent/run_and_wait.sh <script> <checkpoint_dir>` |
-| 9 | Poll for completion | `test -f <checkpoint_dir>/.done && cat <checkpoint_dir>/.done \|\| echo RUNNING` |
-| 10 | Analyze results | Claude (reads eval logs, compares to baseline/best) |
-| 11 | Record iteration | `python -m research_agent.state add-iteration ...` |
-| 12 | Commit results | `python -m research_agent.git_ops commit-results --iteration N --state state.json` |
-| 13 | Merge if best | `python -m research_agent.git_ops merge-best --state state.json` |
-| 14 | Present summary | Claude (shows results to user) |
-| 15 | Next iteration | Wait for user feedback **or** auto-decide (see modes below) |
+| 2 | *(Optional)* **Function A** — find papers | `python research_agent/function_a.py "topic" results.json --state state.json` |
+| 3 | **Function B** — implement change | `python research_agent/function_b.py --papers results.json --project-dir .` or `--instruction "..."` |
+| 4 | Review changes, create branch | `python -m research_agent.git_ops branch-start ...` |
+| 5 | Commit code + push | `python -m research_agent.git_ops commit-code ...` then `push` |
+| 6 | Launch experiment | `bash research_agent/run_and_wait.sh <script> <checkpoint_dir>` |
+| 7 | Poll for completion | `test -f <checkpoint_dir>/.done && cat ... \|\| echo RUNNING` |
+| 8 | Analyze results | Claude (reads eval logs, compares to baseline/best) |
+| 9 | Record iteration | `python -m research_agent.state add-iteration ...` |
+| 10 | Commit results | `python -m research_agent.git_ops commit-results --iteration N --state state.json` |
+| 11 | Merge if best | `python -m research_agent.git_ops merge-best --state state.json` |
+| 12 | Summarize | Claude (shows results to user) |
+| 13 | Next iteration | Wait for user feedback **or** auto-decide (see modes below) |
 
 ### Operating Modes
 
@@ -240,21 +237,49 @@ The user can switch modes at any time: "wait for my feedback from now on" or "co
 
 ## CLI Reference
 
-### search_papers.py — Literature Search
+### function_a.py — Literature Search (Claude API)
 
 ```bash
-# Basic search
-python research_agent/search_papers.py "query terms" output.json
+# Search with explicit topic
+python research_agent/function_a.py "Householder orthogonal adapters ViT" results.json
 
-# With options
-python research_agent/search_papers.py "orthogonal adapters ViT" results.json \
-  --limit 15 \
-  --year-min 2023 \
-  --related-to 2304.12620     # arXiv ID for recommendations
-  --state state.json           # enrich with project context
+# With project context (auto-deduplicates against previously used papers)
+python research_agent/function_a.py "PEFT medical segmentation" results.json --state state.json
+
+# Auto-generate topic from last iteration's feedback
+python research_agent/function_a.py --auto results.json --state state.json
 ```
 
-**Output:** JSON array with `title`, `authors`, `year`, `abstract`, `url`, `arxiv_id`, `citations`, `source`.
+**Output:** JSON array with `title`, `authors`, `year`, `abstract`, `url`, `arxiv_id`, `relevance` (1-5), `relevance_reason`, `key_idea`.
+
+**How it works:** Calls Claude API with the `web_search` server-side tool. Claude plans queries, searches the web, evaluates relevance, and returns structured results. Papers already referenced in previous iterations are excluded.
+
+### function_b.py — Code Implementation (Claude API)
+
+```bash
+# Implement from paper results (from Function A)
+python research_agent/function_b.py --papers results.json --project-dir . --state state.json
+
+# Implement from direct instruction (no papers needed)
+python research_agent/function_b.py --instruction "increase spd_rank to 8" --project-dir .
+
+# Focus on specific files
+python research_agent/function_b.py --papers results.json --project-dir . \
+  --files models/sam/modeling/common.py cfg.py
+```
+
+**Output:** JSON summary to stdout: `{hypothesis, change_summary, files_modified, papers_used}`. Files are modified in place.
+
+**How it works:** Runs a Claude API agentic loop with tools (`read_file`, `edit_file`, `list_files`, `search_code`). Claude reads the codebase, plans changes, and makes targeted edits. Calls the `done` tool when finished.
+
+### search_papers.py — Fallback Search (no API key)
+
+```bash
+# Semantic Scholar + arXiv (free, no auth)
+python research_agent/search_papers.py "query terms" output.json --limit 10 --year-min 2023
+```
+
+**Output:** JSON array with `title`, `authors`, `year`, `abstract`, `url`, `arxiv_id`, `citations`, `source`. No relevance scoring (use Function A for that).
 
 ### state.py — State Management
 
@@ -545,4 +570,4 @@ These are enforced by `protocol.md` when appended to your CLAUDE.md:
 6. **Cite papers** — note references when a technique comes from literature
 7. **Never edit the user's goal** in `progress.md`
 8. **Push after every commit** — keep the remote in sync
-9. **Wait for user feedback** — never start the next iteration without user input
+9. **Review Function B's output** — always verify changes before committing
