@@ -73,6 +73,23 @@ def _branch_name(iteration_id: int, change: str) -> str:
     return f"iter/{iteration_id}-{slug}" if slug else f"iter/{iteration_id}"
 
 
+def _find_iter_branch(iteration_id: int) -> str | None:
+    """Find the actual branch name for an iteration by searching git."""
+    # Try exact prefix match: iter/{id}-*
+    r = _run(["git", "branch", "--list", f"iter/{iteration_id}-*"], check=False)
+    branches = [b.strip().lstrip("* ") for b in r.stdout.strip().splitlines() if b.strip()]
+    if len(branches) == 1:
+        return branches[0]
+    # Also try bare iter/{id} (no slug)
+    r2 = _run(["git", "rev-parse", "--verify", f"iter/{iteration_id}"], check=False)
+    if r2.returncode == 0:
+        return f"iter/{iteration_id}"
+    # Multiple matches — return first
+    if branches:
+        return branches[0]
+    return None
+
+
 # ── Commands ───────────────────────────────────────────────────────────
 
 def cmd_branch_start(args) -> None:
@@ -214,12 +231,13 @@ def cmd_merge_best(args) -> None:
         print(f"Error: best iteration {best['iteration']} not found", file=sys.stderr)
         sys.exit(1)
 
-    branch = _branch_name(best_it["id"], best_it.get("change_summary", ""))
-
-    # Check if branch exists
-    r = _run(["git", "rev-parse", "--verify", branch], check=False)
-    if r.returncode != 0:
-        print(f"Branch {branch} not found. Skipping merge.", file=sys.stderr)
+    # Find the actual branch (may differ from reconstructed name)
+    branch = _find_iter_branch(best_it["id"])
+    if not branch:
+        fallback = _branch_name(best_it["id"], best_it.get("change_summary", ""))
+        print(f"Branch for iteration {best_it['id']} not found "
+              f"(tried iter/{best_it['id']}-* and {fallback}). Skipping merge.",
+              file=sys.stderr)
         sys.exit(1)
 
     current = _current_branch()

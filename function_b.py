@@ -215,7 +215,7 @@ def run_implementation(papers_path: str | None, instruction: str | None,
     proj_abs = shlex.quote(str(Path(project_dir).resolve()))
     cmd = (
         f"cd {proj_abs} && "
-        f"claude -p --verbose "
+        f"claude -p --verbose --dangerously-skip-permissions "
         f"< {shlex.quote(str(prompt_file))} "
         f"> {shlex.quote(str(worker_out))} "
         f"2> {shlex.quote(str(err_file))}; "

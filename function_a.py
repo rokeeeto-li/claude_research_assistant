@@ -223,7 +223,7 @@ def run_search(topic: str, output_path: str,
 
     # Build the command for the tmux worker pane
     cmd = (
-        f"claude -p --verbose "
+        f"claude -p --verbose --dangerously-skip-permissions "
         f"< {shlex.quote(str(prompt_file))} "
         f"> {shlex.quote(str(worker_out))} "
         f"2> {shlex.quote(str(err_file))}; "
