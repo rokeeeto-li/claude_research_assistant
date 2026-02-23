@@ -230,7 +230,7 @@ All commands run via `python -m research_agent.git_ops <command>`:
 - **Primary metric drives decisions**; always report secondary metrics too.
 - **Save experiment scripts** — each iteration's script should be reproducible.
 - **Cite papers** — when a technique comes from literature, note the reference.
-- **Never edit the user's goal section** in `progress.md`.
+- **Update `progress.md`** via `state.py` after every iteration — this is the user's live dashboard. Never edit the user's goal section above the sentinel, but always keep the tracking section below it current.
 - **Push after every commit** — keep remote in sync so nothing is lost.
 - **Present clear summaries** — the user is watching in tmux, make status updates readable.
 - **Review Function B's changes** — always `git diff` after Function B before committing.
