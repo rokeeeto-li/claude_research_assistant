@@ -1,14 +1,14 @@
 ---
 name: implement
-description: Implement a code change in the project. TRIGGER when the user asks to implement something, make a code change, try an idea in code, apply a technique, modify the model/config, or says things like "implement X", "try X in code", "change Y to Z", "apply this paper's approach". Do NOT trigger for pure discussion or analysis — only when actual code changes are requested.
+description: Implement a code change and run the experiment. TRIGGER when the user asks to implement something, make a code change, try an idea in code, apply a technique, modify the model/config, or says things like "implement X", "try X in code", "change Y to Z", "apply this paper's approach". Do NOT trigger for pure discussion or analysis — only when actual code changes are requested.
 argument-hint: <instruction or description of what to implement> [--papers path] [--files file1 file2]
 disable-model-invocation: false
-allowed-tools: Bash(python:*), Bash(cat:*), Bash(test:*), Bash(git diff:*), Bash(git add:*), Bash(git commit:*), Bash(git branch:*), Read, Grep, Agent
+allowed-tools: Bash(python:*), Bash(cat:*), Bash(test:*), Bash(bash:*), Bash(git diff:*), Bash(git add:*), Bash(git commit:*), Bash(git branch:*), Read, Grep, Agent
 ---
 
-# Implement Code Change
+# Implement Code Change → Run → Results
 
-Delegate a code change to an **Agent subagent**. You are the orchestrator — NEVER edit project code directly.
+Delegate a code change to an **Agent subagent**, run the experiment, and present results. You are the orchestrator — NEVER edit project code directly.
 
 ## Step 0: Read current state
 
@@ -21,6 +21,8 @@ cd /data/humanBodyProject/new_proj/research_agent
    python -m research_agent.state read
    ```
 2. If `progress.md` exists, read the user section for notes/constraints.
+
+Record: `GOAL`, `BASELINE`, `BEST`, `LAST_ITERS`, `NEXT_ITER`, `PRIMARY_METRIC`.
 
 ## Step 1: Parse the input
 
@@ -45,20 +47,90 @@ Launch an **Agent** subagent with a detailed prompt including:
 - Key files to focus on
 - Requirement to write summary to `results/impl_summary.json`
 
-## Step 4: Review changes
+## Step 4: Review + Commit Code
 
 1. Read `results/impl_summary.json`.
 2. Show `git diff`.
-3. Present: what changed, hypothesis, diff preview.
+3. Briefly tell the user what was changed.
 
-## Step 5: Ask the user
+4. Commit:
+   ```bash
+   python -m research_agent.git_ops commit-code --iteration <N> \
+     --hypothesis "<HYPOTHESIS>" --change "<CHANGE_DESC>" --papers "<PAPERS>"
+   python -m research_agent.git_ops push
+   ```
 
-- **Accept** — commit via `git_ops commit-code`
-- **Modify** — launch another Agent with refinement
-- **Reject** — `git checkout -- .`
+## Step 5: Discover Experiment Script
+
+Find the experiment/training script. Check in order:
+1. `progress.md` — look for script path or "How to run" section.
+2. Previous iterations in `state.json` — checkpoint path patterns.
+3. File search — `train*.sh`, `train*.py`, `scripts/` directory.
+4. **If not found** — ask the user what script to run.
+
+Determine a unique `CHECKPOINT_DIR` for this iteration (e.g., `checkpoints/iter_<N>`).
+
+## Step 6: Run Experiment
+
+```bash
+python -m research_agent.state launch-iteration --id <N> --checkpoint "<CHECKPOINT_DIR>"
+```
+
+Launch in background:
+```bash
+bash research_agent/run_and_wait.sh <EXP_SCRIPT> <CHECKPOINT_DIR>
+```
+
+Poll for completion:
+```bash
+test -f <CHECKPOINT_DIR>/.done && cat <CHECKPOINT_DIR>/.done || echo RUNNING
+```
+
+## Step 7: Analyze + Record Results
+
+**On success (EXIT_CODE=0):**
+- Extract metrics from checkpoint dir / training log.
+- Record:
+  ```bash
+  python -m research_agent.state complete-iteration --id <N> \
+    --metric-name <PRIMARY_METRIC> --metric-value <VALUE> \
+    --feedback "<observation>"
+  ```
+
+**On failure (EXIT_CODE!=0):**
+- Read `tail -50 <CHECKPOINT_DIR>/training.log` for error.
+- Record:
+  ```bash
+  python -m research_agent.state fail-iteration --id <N> --feedback "<error>"
+  ```
+
+## Step 8: Commit Results + Merge
+
+```bash
+python -m research_agent.git_ops commit-results --iteration <N> --state state.json
+python -m research_agent.git_ops push
+```
+
+If new best:
+```bash
+python -m research_agent.git_ops merge-best --state state.json
+python -m research_agent.git_ops push
+```
+
+## Step 9: Present Results Summary
+
+Present to the user:
+- **Hypothesis**: what you expected
+- **Changes**: files modified + summary
+- **Results**: primary metric value, delta vs baseline, delta vs previous best
+- **Verdict**: NEW_BEST / IMPROVED / NO_IMPROVEMENT / REGRESSED / FAILED
+- **Suggestion**: what to try next based on results
 
 ## Notes
 
 - NEVER implement code yourself. ALWAYS use the Agent tool.
 - NEVER call `code_implementation.py` — it is archived.
 - ONE change per invocation.
+- ALWAYS commit code BEFORE running experiments.
+- Each iteration gets a UNIQUE checkpoint directory.
+- The final output MUST be a results summary, not just a diff.
